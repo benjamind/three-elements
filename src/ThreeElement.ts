@@ -9,9 +9,13 @@ import { observeAttributeChange } from "./util/observeAttributeChange"
 
 export class ThreeElementLifecycleEvent extends CustomEvent<{}> {}
 
+// A weakmap of ThreeJS constructor to attribute list
+const attrMap = new WeakMap<IConstructable, string[]>();
+
 export class ThreeElement<T = any> extends HTMLElement {
   static get observedAttributes(): string[] {
-    return []
+    // return the attribute list for our constructor
+    return attrMap.get(this.threeConstructor!) || [];
   }
 
   /** Has the element been fully initialized? */
@@ -36,6 +40,11 @@ export class ThreeElement<T = any> extends HTMLElement {
         this._object = new constructor(...(Array.isArray(parsed) ? parsed : [parsed]))
       } else {
         this._object = new constructor()
+      }
+      /* Store the attribute list for the constructed instanced if we don't already have it */
+      if (!attrMap.has(constructor)) {
+        const attrs = Object.getOwnPropertyNames(this._object);
+        attrMap.set(constructor, attrs);
       }
     }
 
@@ -153,16 +162,6 @@ export class ThreeElement<T = any> extends HTMLElement {
     /* Apply props */
     this.handleAttributeChange(this.getAllAttributes())
 
-    /*
-    When one of this element's attributes changes, apply it to the object. Custom Elements have a built-in
-    mechanism for this (attributeChangedCallback and observedAttributes, but unfortunately we can't use it,
-    since we don't know the set of attributes the wrapped Three.js classes expose beforehand. So instead
-    we're hacking our way around it using a mutation observer. Fun times!)
-    */
-    this._observer = observeAttributeChange(this, (prop, value) => {
-      this.handleAttributeChange({ [prop]: value })
-    })
-
     /* Emit connected event */
     this.dispatchEvent(
       new ThreeElementLifecycleEvent("connected", { bubbles: true, cancelable: false })
@@ -211,9 +210,6 @@ export class ThreeElement<T = any> extends HTMLElement {
 
   disconnectedCallback() {
     this.debug("disconnectedCallback")
-
-    /* Disconnect observer */
-    this._observer?.disconnect()
 
     /* Emit disconnected event */
     this.dispatchEvent(
@@ -334,7 +330,7 @@ export class ThreeElement<T = any> extends HTMLElement {
 
   attributeChangedCallback(key: string, oldValue: any, newValue: any) {
     this.debug("attributeChangedCallback", key, newValue)
-
+    
     switch (key) {
       /* NOOPs */
       case "args":
@@ -366,15 +362,6 @@ export class ThreeElement<T = any> extends HTMLElement {
       If we've reached this point, we're dealing with an attribute that we don't know.
       */
       default:
-        /*
-        First of all, let's see if we're observing the attribute (as a child class may do.)
-        This is just a cheap way to find out if the class is actually interested in having this
-        property set as an attribute, so we don't randomly just overwrite _any_ property.
-        */
-        if ((this.constructor as any).observedAttributes.includes(key)) {
-          const camelKey = camelize(key)
-          this[camelKey as keyof this] = newValue
-        } else {
           /*
           Okay, at this point, we'll just assume that the property lives on the wrapped object.
           Good times! Let's assign it directly.
@@ -382,7 +369,6 @@ export class ThreeElement<T = any> extends HTMLElement {
           if (this.object) {
             applyProps(this.object, { [key]: newValue })
           }
-        }
     }
   }
 
